@@ -1,0 +1,96 @@
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.top h1 {
+  margin: 0;
+  font-size: 32px;
+}
+
+.home,
+.room,
+.card {
+  display: grid;
+  gap: 12px;
+}
+
+.home {
+  margin-top: 24px;
+}
+
+.card,
+.room {
+  margin-top: 8px;
+  padding: 16px;
+  border: 1px solid #d9d9d4;
+  border-radius: 8px;
+  background: #fff;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+
+input,
+select,
+button {
+  padding: 8px 10px;
+  border: 1px solid #c8c8c2;
+  border-radius: 6px;
+  background: #fff;
+}
+
+button {
+  width: fit-content;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.error {
+  margin-top: 16px;
+  color: #9b1c1c;
+}
+
+.code {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 0.12em;
+}
+
+.room ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.room li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.winner {
+  font-weight: 600;
+}
+
+h2 {
+  margin: 8px 0 0;
+  font-size: 18px;
+}
