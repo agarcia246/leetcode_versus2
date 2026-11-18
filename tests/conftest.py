@@ -3,13 +3,15 @@ from sqlalchemy.orm import sessionmaker
 
 import pytest
 
-from app.domain.backend.models import Base
+from app.database import Base
+import app.domain.catalog.models  # noqa: F401
+import app.domain.matches.models  # noqa: F401
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
 engine = create_engine(
     TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False}
+    connect_args={"check_same_thread": False},
 )
 
 TestingSessionLocal = sessionmaker(bind=engine)

@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from unittest.mock import patch
 
-from app.domain.backend.models import Submission
-from app.domain.backend.services import get_leetcode_player_submissions, record_match_submissions
+from app.domain.matches.models import Submission
+from app.domain.catalog.services import get_leetcode_player_submissions, record_match_submissions
 from tests.factories import add_player, add_problem, add_room, attach, seat
 
 
@@ -39,14 +39,14 @@ def test_get_leetcode_player_submissions_merges_and_hides():
             ],
         }
     }
-    with patch("app.domain.backend.services.leetcode_graphql", return_value=payload):
+    with patch("app.domain.catalog.services.leetcode_graphql", return_value=payload):
         merged = get_leetcode_player_submissions("alex")
 
     assert merged["hidden"] is False
     assert len(merged["submissions"]) == 2
 
     with patch(
-        "app.domain.backend.services.leetcode_graphql",
+        "app.domain.catalog.services.leetcode_graphql",
         return_value={"data": {"recentSubmissionList": None, "recentAcSubmissionList": None}},
     ):
         hidden = get_leetcode_player_submissions("alex")

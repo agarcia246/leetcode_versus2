@@ -3,20 +3,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.domain.backend.models import (
+from app.domain.matches.models import (
     CreateRoomModel,
     GetRoomModel,
     JoinRoomModel,
     StartRoomModel,
 )
-from app.domain.backend.services import (
-    create_room,
-    get_room,
-    join_room,
-    list_match_filters,
-    start_room,
-)
-
+from app.domain.matches.services import create_room, get_room, join_room, start_room
 
 router = APIRouter()
 
@@ -35,14 +28,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-@router.get("/filters")
-def list_filters_route(db: Session = Depends(get_db)):
-    try:
-        return list_match_filters(db)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/rooms/create")

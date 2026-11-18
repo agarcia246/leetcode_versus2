@@ -2,8 +2,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.domain.backend.models import Problem, ProblemTopic, RoomProblem, Topic
-from app.domain.backend.services import (
+from app.domain.catalog.models import Problem, ProblemTopic, Topic
+from app.domain.matches.models import RoomProblem
+from app.domain.catalog.services import (
     add_problems_to_room,
     fetch_problems_for_topics,
     fetch_topic_tags,
@@ -53,22 +54,22 @@ def test_leetcode_graphql_success_and_failures():
         def json(self):
             return self.payload
 
-    with patch("app.domain.backend.services.requests.post", return_value=Response({"data": {}})):
+    with patch("app.domain.catalog.services.requests.post", return_value=Response({"data": {}})):
         assert leetcode_graphql("query {}") == {"data": {}}
 
-    with patch("app.domain.backend.services.requests.post", return_value=Response({}, fail=True)):
+    with patch("app.domain.catalog.services.requests.post", return_value=Response({}, fail=True)):
         with pytest.raises(RuntimeError, match="LeetCode API error"):
             leetcode_graphql("query {}")
 
     with patch(
-        "app.domain.backend.services.requests.post",
+        "app.domain.catalog.services.requests.post",
         return_value=Response({"errors": [{"message": "bad query"}]}),
     ):
         with pytest.raises(RuntimeError, match="bad query"):
             leetcode_graphql("query {}")
 
     with patch(
-        "app.domain.backend.services.requests.post",
+        "app.domain.catalog.services.requests.post",
         return_value=Response({"errors": [{}]}),
     ):
         with pytest.raises(RuntimeError, match="Invalid LeetCode response"):
@@ -77,13 +78,13 @@ def test_leetcode_graphql_success_and_failures():
 
 def test_lookup_leetcode_user():
     with patch(
-        "app.domain.backend.services.leetcode_graphql",
+        "app.domain.catalog.services.leetcode_graphql",
         return_value={"data": {"matchedUser": {"username": "Alex"}}},
     ):
         assert lookup_leetcode_user("alex") == "Alex"
 
     with patch(
-        "app.domain.backend.services.leetcode_graphql",
+        "app.domain.catalog.services.leetcode_graphql",
         return_value={"data": {"matchedUser": None}},
     ):
         with pytest.raises(ValueError, match="not found"):
@@ -91,15 +92,15 @@ def test_lookup_leetcode_user():
 
 
 def test_fetch_and_resolve_topics(db):
-    with patch("app.domain.backend.services.leetcode_graphql", return_value=TAGS):
+    with patch("app.domain.catalog.services.leetcode_graphql", return_value=TAGS):
         tags = fetch_topic_tags()
     assert tags == [{"name": "Array", "slug": "array"}]
 
-    with patch("app.domain.backend.services.leetcode_graphql", return_value={"data": {}}):
+    with patch("app.domain.catalog.services.leetcode_graphql", return_value={"data": {}}):
         with pytest.raises(RuntimeError, match="no topic tags"):
             fetch_topic_tags()
 
-    with patch("app.domain.backend.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
+    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
         resolved = resolve_topics(db, ["Array", "array"])
         assert resolved == [{"name": "Array", "slug": "array"}]
         assert db.query(Topic).filter(Topic.topic_name == "Array").count() == 1
@@ -109,7 +110,7 @@ def test_fetch_and_resolve_topics(db):
 
 
 def test_list_match_filters_stores_topics(db):
-    with patch("app.domain.backend.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
+    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
         filters = list_match_filters(db)
 
     assert filters["difficulties"] == ["Easy", "Medium", "Hard"]
@@ -140,13 +141,13 @@ def test_fetch_problems_skips_unusable_rows_and_pages():
         },
     ]
 
-    with patch("app.domain.backend.services.leetcode_graphql", side_effect=pages):
+    with patch("app.domain.catalog.services.leetcode_graphql", side_effect=pages):
         found = fetch_problems_for_topics("Easy", ["array"], 1)
 
     assert [question["titleSlug"] for question in found] == ["two-sum"]
 
     with patch(
-        "app.domain.backend.services.leetcode_graphql",
+        "app.domain.catalog.services.leetcode_graphql",
         return_value={"data": {"problemsetQuestionListV2": {"questions": [], "hasMore": False}}},
     ):
         assert fetch_problems_for_topics("Easy", ["array"], 1) == []
@@ -166,7 +167,7 @@ def test_local_problem_ids_samples_when_there_are_extras(db):
     add_problem(db, slug="two")
     assert len(local_problem_ids(db, ["Array"], "Easy", 5)) == 2
 
-    with patch("app.domain.backend.services.random.sample", return_value=[1]):
+    with patch("app.domain.catalog.services.random.sample", return_value=[1]):
         assert local_problem_ids(db, ["Array"], "Easy", 1) == [1]
 
 
@@ -184,25 +185,25 @@ def test_add_problems_to_room_stores_a_sample_and_falls_back(db):
         },
     ]
 
-    with patch("app.domain.backend.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
-        with patch("app.domain.backend.services.fetch_problems_for_topics", return_value=questions):
-            with patch("app.domain.backend.services.random.sample", side_effect=lambda ids, count: ids[:count]):
+    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
+        with patch("app.domain.catalog.services.fetch_problems_for_topics", return_value=questions):
+            with patch("app.domain.catalog.services.random.sample", side_effect=lambda ids, count: ids[:count]):
                 add_problems_to_room(db, 1, ["Array"], "Easy", room.id)
 
     assert db.query(RoomProblem).filter(RoomProblem.room_id == room.id).count() == 1
 
     other = add_room(db, host, code="ROOM02")
     saved = add_problem(db, slug="local-only", topic="Hash Table")
-    with patch("app.domain.backend.services.fetch_topic_tags", return_value=[{"name": "Hash Table", "slug": "hash-table"}]):
-        with patch("app.domain.backend.services.fetch_problems_for_topics", side_effect=RuntimeError("down")):
+    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Hash Table", "slug": "hash-table"}]):
+        with patch("app.domain.catalog.services.fetch_problems_for_topics", side_effect=RuntimeError("down")):
             add_problems_to_room(db, 1, ["Hash Table"], "Easy", other.id)
 
     attached = db.query(RoomProblem).filter(RoomProblem.room_id == other.id).all()
     assert [row.problem_id for row in attached] == [saved.id]
 
     empty = add_room(db, host, code="ROOM03")
-    with patch("app.domain.backend.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
-        with patch("app.domain.backend.services.fetch_problems_for_topics", side_effect=RuntimeError("down")):
-            with patch("app.domain.backend.services.local_problem_ids", return_value=[]):
+    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
+        with patch("app.domain.catalog.services.fetch_problems_for_topics", side_effect=RuntimeError("down")):
+            with patch("app.domain.catalog.services.local_problem_ids", return_value=[]):
                 with pytest.raises(ValueError, match="Not enough problems"):
                     add_problems_to_room(db, 1, ["Array"], "Easy", empty.id)

@@ -1,27 +1,23 @@
-from pydantic import BaseModel, field_validator
+"""Matches domain tables: rooms, players, dealt problems, submissions."""
+
 import enum
 
+from pydantic import BaseModel, field_validator
 from sqlalchemy import (
+    CheckConstraint,
     Column,
+    ForeignKey,
     Integer,
     String,
-    ForeignKey,
-    CheckConstraint,
-    UniqueConstraint,
     Text,
+    UniqueConstraint,
 )
-
-
-
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.domain.common import DIFFICULTIES
 
 
-
-
-
-# Database Models
 class Player(Base):
     __tablename__ = "players"
 
@@ -38,28 +34,19 @@ class Room(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     room_code = Column(String, nullable=False, unique=True)
-
     host_id = Column(Integer, ForeignKey("players.id"), nullable=False)
-
-    current_status = Column(
-        String,
-        nullable=False,
-        default="Created"
-    )
-
+    current_status = Column(String, nullable=False, default="Created")
     duration_min = Column(Integer, nullable=False, default=30)
-
     creation_time = Column(Text, nullable=False)
     start_time = Column(Text)
     end_time = Column(Text)
-
     last_polled_at = Column(Text)
     poll_error = Column(Text)
 
     __table_args__ = (
         CheckConstraint(
             "current_status IN ('Created', 'Active', 'Inactive', 'Finished')",
-            name="check_room_status"
+            name="check_room_status",
         ),
     )
 
@@ -69,97 +56,22 @@ class Room(Base):
     room_problems = relationship("RoomProblem", back_populates="room")
 
 
-class Problem(Base):
-    __tablename__ = "problems"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    title = Column(String, nullable=False)
-
-    lc_id = Column(String, nullable=False, unique=True)
-
-    lc_url = Column(String, nullable=False)
-
-    difficulty = Column(String, nullable=False)
-
-    __table_args__ = (
-        CheckConstraint(
-            "difficulty IN ('Easy', 'Medium', 'Hard')",
-            name="check_problem_difficulty"
-        ),
-    )
-
-    submissions = relationship("Submission", back_populates="problem")
-    room_problems = relationship("RoomProblem", back_populates="problem")
-    topic_links = relationship("ProblemTopic", back_populates="problem")
-
-
-class Submission(Base):
-    __tablename__ = "submissions"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    room_id = Column(
-        Integer,
-        ForeignKey("rooms.id", ondelete="CASCADE"),
-        nullable=False
-    )
-
-    player_id = Column(
-        Integer,
-        ForeignKey("players.id", ondelete="CASCADE"),
-        nullable=False
-    )
-
-    problem_id = Column(
-        Integer,
-        ForeignKey("problems.id", ondelete="CASCADE"),
-        nullable=False
-    )
-
-    submitted_at = Column(Text, nullable=False)
-
-    current_status = Column(String, nullable=False)
-
-    __table_args__ = (
-        CheckConstraint(
-            "current_status IN ('Accepted', 'Wrong_Answer', 'Time_Limit', 'Pending')",
-            name="check_submission_status"
-        ),
-    )
-
-    room = relationship("Room", back_populates="submissions")
-    player = relationship("Player", back_populates="submissions")
-    problem = relationship("Problem", back_populates="submissions")
-
-
-class Topic(Base):
-    __tablename__ = "topics"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    topic_name = Column(String, nullable=False, unique=True)
-
-    problem_links = relationship("ProblemTopic", back_populates="topic")
-
-
 class RoomProblem(Base):
+    """Problems dealt into a room (Dealt_Problems in Research/Database.png)."""
+
     __tablename__ = "room_problems"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-
     room_id = Column(
         Integer,
         ForeignKey("rooms.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
     )
-
     problem_id = Column(
         Integer,
         ForeignKey("problems.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
     )
-
     display_order = Column(Integer, nullable=False)
 
     __table_args__ = (
@@ -175,34 +87,25 @@ class RoomPlayer(Base):
     __tablename__ = "room_players"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-
     room_id = Column(
         Integer,
         ForeignKey("rooms.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
     )
-
     player_id = Column(
         Integer,
         ForeignKey("players.id", ondelete="CASCADE"),
-        nullable=False
-    )
-
-    joined_at = Column(Text, nullable=False)
-
-    score = Column(Integer, nullable=False, default=0)
-
-    result = Column(
-        String,
         nullable=False,
-        default="Created"
     )
+    joined_at = Column(Text, nullable=False)
+    score = Column(Integer, nullable=False, default=0)
+    result = Column(String, nullable=False, default="Created")
 
     __table_args__ = (
         UniqueConstraint("room_id", "player_id"),
         CheckConstraint(
             "result IN ('Created', 'In_Progress', 'Winner', 'Loser')",
-            name="check_room_player_result"
+            name="check_room_player_result",
         ),
     )
 
@@ -210,39 +113,38 @@ class RoomPlayer(Base):
     player = relationship("Player", back_populates="room_links")
 
 
-class ProblemTopic(Base):
-    __tablename__ = "problem_topics"
+class Submission(Base):
+    __tablename__ = "submissions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-
+    room_id = Column(
+        Integer,
+        ForeignKey("rooms.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    player_id = Column(
+        Integer,
+        ForeignKey("players.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     problem_id = Column(
         Integer,
         ForeignKey("problems.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
     )
-
-    topic_id = Column(
-        Integer,
-        ForeignKey("topics.id", ondelete="CASCADE"),
-        nullable=False
-    )
+    submitted_at = Column(Text, nullable=False)
+    current_status = Column(String, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("problem_id", "topic_id"),
+        CheckConstraint(
+            "current_status IN ('Accepted', 'Wrong_Answer', 'Time_Limit', 'Pending')",
+            name="check_submission_status",
+        ),
     )
 
-    problem = relationship("Problem", back_populates="topic_links")
-    topic = relationship("Topic", back_populates="problem_links")
-
-
-
-
-
-# API
-
-
-
-DIFFICULTIES = ("Easy", "Medium", "Hard")
+    room = relationship("Room", back_populates="submissions")
+    player = relationship("Player", back_populates="submissions")
+    problem = relationship("Problem", back_populates="submissions")
 
 
 class CreateRoomModel(BaseModel):
@@ -294,19 +196,19 @@ class CreateRoomModel(BaseModel):
             raise ValueError("at least one topic is required")
         return cleaned
 
+
 class JoinRoomModel(BaseModel):
-    username:str
-    room_code:str
+    username: str
+    room_code: str
 
 
 class StartRoomModel(BaseModel):
-    player_id:int
-    room_code:str
+    player_id: int
+    room_code: str
 
 
 class GetRoomModel(BaseModel):
-    room_code:str
-
+    room_code: str
 
 
 class RoomStatus(str, enum.Enum):

@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 
-from app.domain.backend.models import Player, Problem, ProblemTopic, Room, RoomPlayer, RoomProblem, Topic
-from app.domain.backend.services import to_db_time
+from app.domain.catalog.models import Problem, ProblemTopic, Topic
+from app.domain.common import to_db_time
+from app.domain.matches.models import Player, Room, RoomPlayer, RoomProblem
 
 
 def add_player(db, username):
