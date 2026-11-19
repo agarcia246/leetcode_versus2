@@ -67,11 +67,9 @@ class RoomProblem(Base):
         ForeignKey("rooms.id", ondelete="CASCADE"),
         nullable=False,
     )
-    problem_id = Column(
-        Integer,
-        ForeignKey("problems.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # Catalog's problems.id. A plain ID, not a foreign key: the problems table
+    # belongs to the catalog domain, so the link is checked in code instead.
+    problem_id = Column(Integer, nullable=False)
     display_order = Column(Integer, nullable=False)
 
     __table_args__ = (
@@ -80,7 +78,6 @@ class RoomProblem(Base):
     )
 
     room = relationship("Room", back_populates="room_problems")
-    problem = relationship("Problem", back_populates="room_problems")
 
 
 class RoomPlayer(Base):
@@ -127,11 +124,8 @@ class Submission(Base):
         ForeignKey("players.id", ondelete="CASCADE"),
         nullable=False,
     )
-    problem_id = Column(
-        Integer,
-        ForeignKey("problems.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # Catalog's problems.id, kept as a plain ID for the same reason as RoomProblem.
+    problem_id = Column(Integer, nullable=False)
     submitted_at = Column(Text, nullable=False)
     current_status = Column(String, nullable=False)
 
@@ -144,7 +138,6 @@ class Submission(Base):
 
     room = relationship("Room", back_populates="submissions")
     player = relationship("Player", back_populates="submissions")
-    problem = relationship("Problem", back_populates="submissions")
 
 
 class CreateRoomModel(BaseModel):

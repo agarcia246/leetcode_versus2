@@ -1,14 +1,17 @@
-"""Catalog domain: LeetCode topics/problems and match scoring from public submissions."""
+"""Catalog domain: LeetCode topics and problems.
 
-from datetime import datetime, timezone
+The catalog owns `problems`, `topics` and `problem_topics`. It knows nothing about
+rooms or players. The matches domain reaches it only through `pick_problems` and
+`get_problems`, which return plain dicts (the future HTTP response bodies).
+"""
+
 import random
 
 import requests
 from sqlalchemy.orm import Session
 
 from app.domain.catalog.models import Problem, ProblemTopic, Topic
-from app.domain.common import DIFFICULTIES, to_db_time
-from app.domain.matches.models import Room, RoomPlayer, RoomProblem, Submission
+from app.domain.common import DIFFICULTIES
 
 LEETCODE_URL = "https://leetcode.com/graphql"
 LEETCODE_HEADERS = {
@@ -23,22 +26,6 @@ DIFFICULTY_TO_API = {
     "Hard": "HARD",
 }
 API_TO_DIFFICULTY = {api_name: name for name, api_name in DIFFICULTY_TO_API.items()}
-
-
-def submission_in_window(
-    submission_time: datetime,
-    start_time: datetime | None,
-    end_time: datetime | None,
-) -> bool:
-    """Count a solve only after the match starts and before it ends."""
-
-    if start_time is None or submission_time < start_time:
-        return False
-
-    if end_time is not None and submission_time > end_time:
-        return False
-
-    return True
 
 
 def leetcode_graphql(query: str, variables: dict | None = None) -> dict:
@@ -61,26 +48,6 @@ def leetcode_graphql(query: str, variables: dict | None = None) -> dict:
         raise RuntimeError(f"LeetCode API error: {message}")
 
     return payload
-
-
-def lookup_leetcode_user(username: str) -> str:
-    """Return LeetCode's canonical username, or raise if the account does not exist."""
-
-    query = """
-    query ($username: String!) {
-        matchedUser(username: $username) {
-            username
-        }
-    }
-    """
-
-    payload = leetcode_graphql(query, {"username": username})
-    matched = (payload.get("data") or {}).get("matchedUser")
-
-    if not matched or not matched.get("username"):
-        raise ValueError(f"LeetCode user '{username}' was not found")
-
-    return matched["username"]
 
 
 def fetch_topic_tags() -> list[dict]:
@@ -294,14 +261,24 @@ def local_problem_ids(db: Session, topic_names: list[str], difficulty: str, coun
     return random.sample(problem_ids, count)
 
 
-def add_problems_to_room(
-    db: Session,
-    count: int,
-    topics: list[str],
-    difficulty: str,
-    room_id: int,
-) -> None:
-    """Fetch a filtered LeetCode set, store it, and attach a random sample to the room."""
+def problem_to_dict(problem: Problem) -> dict:
+    """The shape the catalog hands to other domains (and later sends over HTTP)."""
+
+    return {
+        "id": problem.id,
+        "title": problem.title,
+        "slug": problem.lc_id,
+        "url": problem.lc_url,
+        "difficulty": problem.difficulty,
+    }
+
+
+def pick_problems(db: Session, count: int, topics: list[str], difficulty: str) -> list[dict]:
+    """Fetch a filtered LeetCode set, store it, and return a random sample of `count`.
+
+    Falls back to problems already stored when LeetCode is unreachable. Raises
+    ValueError for an unknown topic or when fewer than `count` problems exist.
+    """
 
     resolved = resolve_topics(db, topics)
     topic_names = [tag["name"] for tag in resolved]
@@ -316,173 +293,20 @@ def add_problems_to_room(
         problem_ids = local_problem_ids(db, topic_names, difficulty, count)
 
     if len(problem_ids) < count:
+        db.rollback()
         raise ValueError("Not enough problems available for selection")
 
-    room_problems = []
-
-    for index, problem_id in enumerate(problem_ids):
-        room_problems.append(
-            RoomProblem(
-                room_id=room_id,
-                problem_id=problem_id,
-                display_order=index,
-            )
-        )
-
-    db.add_all(room_problems)
+    db.commit()
+    return get_problems(db, problem_ids)
 
 
-def canonical_submission_status(status_display: str | None) -> str:
-    """Map a LeetCode status onto the statuses stored for a match."""
+def get_problems(db: Session, problem_ids: list[int]) -> list[dict]:
+    """Return the requested problems in the order of `problem_ids`. Unknown IDs are skipped."""
 
-    normalized = (status_display or "").strip().lower()
-    if normalized == "accepted":
-        return "Accepted"
-    if normalized == "wrong answer":
-        return "Wrong_Answer"
-    if normalized == "time limit exceeded":
-        return "Time_Limit"
-    return "Pending"
+    if not problem_ids:
+        return []
 
+    rows = db.query(Problem).filter(Problem.id.in_(problem_ids)).all()
+    by_id = {problem.id: problem for problem in rows}
 
-def get_leetcode_player_submissions(lc_username: str) -> dict:
-    """Fetch recent submissions of every status, plus the separate accepted list.
-
-    LeetCode only returns about 20 rows from each public list. Accepted solves are
-    read from both, so later wrong answers do not hide a solve. A null list means
-    the profile did not share submissions.
-    """
-
-    query = """
-    query recentSubmissions($username: String!, $limit: Int!) {
-        recentSubmissionList(username: $username) {
-            title
-            titleSlug
-            timestamp
-            statusDisplay
-            lang
-        }
-        recentAcSubmissionList(username: $username, limit: $limit) {
-            title
-            titleSlug
-            timestamp
-            statusDisplay
-            lang
-        }
-    }
-    """
-
-    payload = leetcode_graphql(
-        query,
-        {"username": lc_username, "limit": 20},
-    )
-    data = payload.get("data") or {}
-    recent = data.get("recentSubmissionList")
-    accepted = data.get("recentAcSubmissionList")
-
-    if recent is None and accepted is None:
-        return {"submissions": [], "hidden": True}
-
-    merged = []
-    seen = set()
-
-    for submission in (recent or []) + (accepted or []):
-        slug = submission.get("titleSlug")
-        timestamp = submission.get("timestamp")
-        status = submission.get("statusDisplay")
-        if not slug or timestamp is None:
-            continue
-        key = (slug, str(timestamp), status)
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(submission)
-
-    return {"submissions": merged, "hidden": False}
-
-
-def record_match_submissions(
-    db: Session,
-    room: Room,
-    room_player: RoomPlayer,
-    submissions: list[dict],
-    room_problem_slugs: set[str],
-    start_time: datetime | None,
-    end_time: datetime | None,
-) -> list[Submission]:
-    """Store one in-window result per problem. Only a new Accepted solve increases score."""
-
-    grouped = {}
-
-    for submission in submissions:
-        slug = submission.get("titleSlug")
-        if not slug or slug not in room_problem_slugs:
-            continue
-
-        try:
-            submission_time = datetime.fromtimestamp(
-                int(submission["timestamp"]),
-                tz=timezone.utc,
-            )
-        except (TypeError, ValueError, KeyError):
-            continue
-
-        if not submission_in_window(submission_time, start_time, end_time):
-            continue
-
-        grouped.setdefault(slug, []).append((submission_time, submission))
-
-    submissions_to_add = []
-
-    for slug, attempts in grouped.items():
-        accepted_attempts = [
-            (submission_time, submission)
-            for submission_time, submission in attempts
-            if canonical_submission_status(submission.get("statusDisplay")) == "Accepted"
-        ]
-
-        if accepted_attempts:
-            submission_time, _submission = min(accepted_attempts, key=lambda item: item[0])
-            status = "Accepted"
-        else:
-            submission_time, submission = max(attempts, key=lambda item: item[0])
-            status = canonical_submission_status(submission.get("statusDisplay"))
-
-        existing_submission = (
-            db.query(Submission)
-            .join(Problem, Problem.id == Submission.problem_id)
-            .filter(
-                Submission.room_id == room.id,
-                Submission.player_id == room_player.player_id,
-                Problem.lc_id == slug,
-            )
-            .first()
-        )
-
-        if existing_submission is not None:
-            if existing_submission.current_status == "Accepted":
-                continue
-            if status == "Accepted":
-                existing_submission.current_status = "Accepted"
-                existing_submission.submitted_at = to_db_time(submission_time)
-                room_player.score += 1
-            continue
-
-        problem_id = db.query(Problem.id).filter(Problem.lc_id == slug).scalar()
-        if problem_id is None:
-            continue
-
-        submissions_to_add.append(
-            Submission(
-                room_id=room.id,
-                player_id=room_player.player_id,
-                problem_id=problem_id,
-                submitted_at=to_db_time(submission_time),
-                current_status=status,
-            )
-        )
-
-        if status == "Accepted":
-            room_player.score += 1
-
-    return submissions_to_add
+    return [problem_to_dict(by_id[problem_id]) for problem_id in problem_ids if problem_id in by_id]

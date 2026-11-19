@@ -3,19 +3,18 @@ from unittest.mock import patch
 import pytest
 
 from app.domain.catalog.models import Problem, ProblemTopic, Topic
-from app.domain.matches.models import RoomProblem
 from app.domain.catalog.services import (
-    add_problems_to_room,
     fetch_problems_for_topics,
     fetch_topic_tags,
+    get_problems,
     leetcode_graphql,
     list_match_filters,
     local_problem_ids,
-    lookup_leetcode_user,
+    pick_problems,
     resolve_topics,
     upsert_problem,
 )
-from tests.factories import add_player, add_problem, add_room
+from tests.factories import add_problem
 
 
 TWO_SUM = {
@@ -74,21 +73,6 @@ def test_leetcode_graphql_success_and_failures():
     ):
         with pytest.raises(RuntimeError, match="Invalid LeetCode response"):
             leetcode_graphql("query {}")
-
-
-def test_lookup_leetcode_user():
-    with patch(
-        "app.domain.catalog.services.leetcode_graphql",
-        return_value={"data": {"matchedUser": {"username": "Alex"}}},
-    ):
-        assert lookup_leetcode_user("alex") == "Alex"
-
-    with patch(
-        "app.domain.catalog.services.leetcode_graphql",
-        return_value={"data": {"matchedUser": None}},
-    ):
-        with pytest.raises(ValueError, match="not found"):
-            lookup_leetcode_user("missing")
 
 
 def test_fetch_and_resolve_topics(db):
@@ -171,9 +155,7 @@ def test_local_problem_ids_samples_when_there_are_extras(db):
         assert local_problem_ids(db, ["Array"], "Easy", 1) == [1]
 
 
-def test_add_problems_to_room_stores_a_sample_and_falls_back(db):
-    host = add_player(db, "alex")
-    room = add_room(db, host)
+def test_pick_problems_returns_a_sample_and_falls_back(db):
     questions = [
         TWO_SUM,
         {
@@ -188,22 +170,38 @@ def test_add_problems_to_room_stores_a_sample_and_falls_back(db):
     with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
         with patch("app.domain.catalog.services.fetch_problems_for_topics", return_value=questions):
             with patch("app.domain.catalog.services.random.sample", side_effect=lambda ids, count: ids[:count]):
-                add_problems_to_room(db, 1, ["Array"], "Easy", room.id)
+                picked = pick_problems(db, 1, ["Array"], "Easy")
 
-    assert db.query(RoomProblem).filter(RoomProblem.room_id == room.id).count() == 1
+    assert [problem["slug"] for problem in picked] == ["two-sum"]
+    assert set(picked[0]) == {"id", "title", "slug", "url", "difficulty"}
+    assert db.query(Problem).count() == 2
 
-    other = add_room(db, host, code="ROOM02")
     saved = add_problem(db, slug="local-only", topic="Hash Table")
     with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Hash Table", "slug": "hash-table"}]):
         with patch("app.domain.catalog.services.fetch_problems_for_topics", side_effect=RuntimeError("down")):
-            add_problems_to_room(db, 1, ["Hash Table"], "Easy", other.id)
+            fallback = pick_problems(db, 1, ["Hash Table"], "Easy")
 
-    attached = db.query(RoomProblem).filter(RoomProblem.room_id == other.id).all()
-    assert [row.problem_id for row in attached] == [saved.id]
+    assert [problem["id"] for problem in fallback] == [saved.id]
 
-    empty = add_room(db, host, code="ROOM03")
     with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
         with patch("app.domain.catalog.services.fetch_problems_for_topics", side_effect=RuntimeError("down")):
             with patch("app.domain.catalog.services.local_problem_ids", return_value=[]):
                 with pytest.raises(ValueError, match="Not enough problems"):
-                    add_problems_to_room(db, 1, ["Array"], "Easy", empty.id)
+                    pick_problems(db, 1, ["Array"], "Easy")
+
+
+def test_get_problems_keeps_order_and_skips_unknown_ids(db):
+    first = add_problem(db, slug="first")
+    second = add_problem(db, slug="second")
+
+    problems = get_problems(db, [second.id, 999, first.id])
+
+    assert [problem["slug"] for problem in problems] == ["second", "first"]
+    assert problems[0] == {
+        "id": second.id,
+        "title": "Two Sum",
+        "slug": "second",
+        "url": "https://leetcode.com/problems/second/",
+        "difficulty": "Easy",
+    }
+    assert get_problems(db, []) == []
