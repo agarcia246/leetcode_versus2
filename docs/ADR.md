@@ -18,7 +18,7 @@ Consequences: the whole project falls under the single container requirement. On
 ## [2]. Two feature domains that can be split later
 
 Date: 2026-09-30
-Status: Decided
+Status: Superseded by [6]
 Context: The match and the problem list are different jobs. The assignment wants both in one process now, with a seam I can point at later.
 Decision: Domain 1 is the match: `rooms`, `players`, `room_players`, and `create_room`, `join_room`, `start_room`, `expire_inactive_lobby`, and `assign_match_results`. Domain 2 is the catalog and the solves: `problems`, `topics`, `problem_topics`, `room_problems`, `submissions`, plus `fetch_problems_for_topics`, `upsert_problem`, and `record_match_submissions`. They meet at `room_problems`. Both live in `app/domain/backend/services.py` for now.
 Alternatives considered: One CRUD module with no seam, or two Python packages from the start. I rejected two packages because this assignment is one process and the seam is only those calls. I rejected one blob because a later assignment has to split the domains.
