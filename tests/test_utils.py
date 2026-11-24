@@ -1,15 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.domain.catalog.services import canonical_submission_status, submission_in_window
 from app.domain.common import parse_db_time, to_db_time
 from app.domain.matches.models import RoomPlayer
 from app.domain.matches.services import (
     add_player_to_room,
     assign_match_results,
+    canonical_submission_status,
     expire_inactive_lobby,
     generate_room_code,
     get_or_create_player,
+    submission_in_window,
 )
 from tests.factories import add_player, add_room
 

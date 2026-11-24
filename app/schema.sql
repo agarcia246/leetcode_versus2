@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+    problem_id INTEGER NOT NULL, -- catalog's problems.id, no FK across the seam
     submitted_at TEXT NOT NULL,
     current_status TEXT NOT NULL CHECK (current_status IN ('Accepted', 'Wrong_Answer', 'Time_Limit', 'Pending'))
 );
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS submissions (
 CREATE TABLE IF NOT EXISTS room_problems (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+    problem_id INTEGER NOT NULL, -- catalog's problems.id, no FK across the seam
     display_order INTEGER NOT NULL,
     UNIQUE (room_id, problem_id),
     UNIQUE (room_id, display_order)

@@ -1,6 +1,6 @@
 """Matches domain: rooms, players, lobby lifecycle, and results."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import random
 import string
 
@@ -8,14 +8,9 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain.catalog.models import Problem
-from app.domain.catalog.services import (
-    add_problems_to_room,
-    get_leetcode_player_submissions,
-    lookup_leetcode_user,
-    record_match_submissions,
-)
 from app.domain.common import DIFFICULTIES, parse_db_time, to_db_time, utc_now
+from app.domain.matches import catalog_client
+from app.domain.matches.leetcode import get_leetcode_player_submissions, lookup_leetcode_user
 from app.domain.matches.models import (
     CreateRoomModel,
     GetRoomModel,
@@ -25,6 +20,7 @@ from app.domain.matches.models import (
     RoomPlayer,
     RoomProblem,
     StartRoomModel,
+    Submission,
 )
 
 ROOM_STATUS_CREATED = "Created"
@@ -133,6 +129,135 @@ def add_player_to_room(db: Session, player_id: int, room_id: int) -> RoomPlayer 
     return room_player
 
 
+def add_problems_to_room(db: Session, room_id: int, problems: list[dict]) -> None:
+    """Deal the problems the catalog picked into the room, in order."""
+
+    db.add_all(
+        RoomProblem(
+            room_id=room_id,
+            problem_id=problem["id"],
+            display_order=index,
+        )
+        for index, problem in enumerate(problems)
+    )
+
+
+def submission_in_window(
+    submission_time: datetime,
+    start_time: datetime | None,
+    end_time: datetime | None,
+) -> bool:
+    """Count a solve only after the match starts and before it ends."""
+
+    if start_time is None or submission_time < start_time:
+        return False
+
+    if end_time is not None and submission_time > end_time:
+        return False
+
+    return True
+
+
+def canonical_submission_status(status_display: str | None) -> str:
+    """Map a LeetCode status onto the statuses stored for a match."""
+
+    normalized = (status_display or "").strip().lower()
+    if normalized == "accepted":
+        return "Accepted"
+    if normalized == "wrong answer":
+        return "Wrong_Answer"
+    if normalized == "time limit exceeded":
+        return "Time_Limit"
+    return "Pending"
+
+
+def record_match_submissions(
+    db: Session,
+    room: Room,
+    room_player: RoomPlayer,
+    submissions: list[dict],
+    problem_ids_by_slug: dict[str, int],
+    start_time: datetime | None,
+    end_time: datetime | None,
+) -> list[Submission]:
+    """Store one in-window result per problem. Only a new Accepted solve increases score.
+
+    `problem_ids_by_slug` maps the room's problem slugs to catalog problem IDs.
+    Submissions for any other problem are ignored.
+    """
+
+    grouped = {}
+
+    for submission in submissions:
+        slug = submission.get("titleSlug")
+        if not slug or slug not in problem_ids_by_slug:
+            continue
+
+        try:
+            submission_time = datetime.fromtimestamp(
+                int(submission["timestamp"]),
+                tz=timezone.utc,
+            )
+        except (TypeError, ValueError, KeyError):
+            continue
+
+        if not submission_in_window(submission_time, start_time, end_time):
+            continue
+
+        grouped.setdefault(slug, []).append((submission_time, submission))
+
+    submissions_to_add = []
+
+    for slug, attempts in grouped.items():
+        problem_id = problem_ids_by_slug[slug]
+        accepted_attempts = [
+            (submission_time, submission)
+            for submission_time, submission in attempts
+            if canonical_submission_status(submission.get("statusDisplay")) == "Accepted"
+        ]
+
+        if accepted_attempts:
+            submission_time, _submission = min(accepted_attempts, key=lambda item: item[0])
+            status = "Accepted"
+        else:
+            submission_time, submission = max(attempts, key=lambda item: item[0])
+            status = canonical_submission_status(submission.get("statusDisplay"))
+
+        existing_submission = (
+            db.query(Submission)
+            .filter(
+                Submission.room_id == room.id,
+                Submission.player_id == room_player.player_id,
+                Submission.problem_id == problem_id,
+            )
+            .first()
+        )
+
+        if existing_submission is not None:
+            if existing_submission.current_status == "Accepted":
+                continue
+            if status == "Accepted":
+                existing_submission.current_status = "Accepted"
+                existing_submission.submitted_at = to_db_time(submission_time)
+                room_player.score += 1
+            continue
+
+        submissions_to_add.append(
+            Submission(
+                room_id=room.id,
+                player_id=room_player.player_id,
+                problem_id=problem_id,
+                submitted_at=to_db_time(submission_time),
+                current_status=status,
+            )
+        )
+
+        if status == "Accepted":
+            room_player.score += 1
+
+    return submissions_to_add
+
+
 def validate_room_settings(model: CreateRoomModel) -> None:
     """Reject a room that asks for a duration, size, or difficulty the match cannot run."""
 
@@ -154,6 +279,17 @@ def create_room(db: Session, model: CreateRoomModel):
 
     try:
         validate_room_settings(model)
+
+        # Ask the catalog first, before this domain writes anything: if the catalog
+        # cannot supply the problems, no half-built room or player is left behind.
+        problems = catalog_client.pick_problems(
+            count=model.problem_count,
+            topics=model.topics,
+            difficulty=model.difficulty,
+        )
+        if len(problems) < model.problem_count:
+            raise ValueError("Not enough problems available for selection")
+
         code = generate_room_code(db)
 
         host = get_or_create_player(db, model.host_username)
@@ -175,10 +311,8 @@ def create_room(db: Session, model: CreateRoomModel):
 
         add_problems_to_room(
             db=db,
-            count=model.problem_count,
-            topics=model.topics,
-            difficulty=model.difficulty,
             room_id=room.id,
+            problems=problems[: model.problem_count],
         )
 
         add_player_to_room(
@@ -373,13 +507,25 @@ def get_room(db: Session, model: GetRoomModel):
             room.current_status == ROOM_STATUS_FINISHED and results_pending
         )
 
+        # Was a join with the catalog's problems table. Now: read this room's
+        # problem IDs here, and ask the catalog for their details in one call.
+        room_problems = (
+            db.query(RoomProblem)
+            .filter(RoomProblem.room_id == room.id)
+            .order_by(RoomProblem.display_order)
+            .all()
+        )
+        catalog_problems = {
+            problem["id"]: problem
+            for problem in catalog_client.get_problems(
+                [room_problem.problem_id for room_problem in room_problems]
+            )
+        }
+
         if should_poll:
-            room_problem_slugs = {
-                lc_id
-                for (lc_id,) in db.query(Problem.lc_id)
-                .join(RoomProblem, Problem.id == RoomProblem.problem_id)
-                .filter(RoomProblem.room_id == room.id)
-                .all()
+            problem_ids_by_slug = {
+                problem["slug"]: problem_id
+                for problem_id, problem in catalog_problems.items()
             }
 
             submissions_to_add = []
@@ -404,7 +550,7 @@ def get_room(db: Session, model: GetRoomModel):
                         room,
                         room_player,
                         player_submissions["submissions"],
-                        room_problem_slugs,
+                        problem_ids_by_slug,
                         start_time,
                         end_time,
                     )
@@ -419,14 +565,6 @@ def get_room(db: Session, model: GetRoomModel):
         if time_up or room.current_status == ROOM_STATUS_FINISHED:
             room.current_status = ROOM_STATUS_FINISHED
             assign_match_results(room_players)
-
-        problems = (
-            db.query(Problem, RoomProblem.display_order)
-            .join(RoomProblem, Problem.id == RoomProblem.problem_id)
-            .filter(RoomProblem.room_id == room.id)
-            .order_by(RoomProblem.display_order)
-            .all()
-        )
 
         db.commit()
 
@@ -446,13 +584,15 @@ def get_room(db: Session, model: GetRoomModel):
             ],
             "problems": [
                 {
-                    "title": problem.title,
-                    "slug": problem.lc_id,
-                    "url": problem.lc_url,
-                    "difficulty": problem.difficulty,
-                    "display_order": display_order,
+                    "title": catalog_problems[room_problem.problem_id]["title"],
+                    "slug": catalog_problems[room_problem.problem_id]["slug"],
+                    "url": catalog_problems[room_problem.problem_id]["url"],
+                    "difficulty": catalog_problems[room_problem.problem_id]["difficulty"],
+                    "display_order": room_problem.display_order,
                 }
-                for problem, display_order in problems
+                for room_problem in room_problems
+                # No FK across the seam: a problem the catalog no longer has is skipped.
+                if room_problem.problem_id in catalog_problems
             ],
         }
 

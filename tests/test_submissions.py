@@ -2,8 +2,15 @@ from datetime import datetime, timedelta, timezone
 
 from unittest.mock import patch
 
+import pytest
+
+from app.domain.matches.leetcode import (
+    get_leetcode_player_submissions,
+    leetcode_graphql,
+    lookup_leetcode_user,
+)
 from app.domain.matches.models import Submission
-from app.domain.catalog.services import get_leetcode_player_submissions, record_match_submissions
+from app.domain.matches.services import record_match_submissions
 from tests.factories import add_player, add_problem, add_room, attach, seat
 
 
@@ -15,7 +22,7 @@ def open_match(db):
     problem = add_problem(db)
     attach(db, room, problem)
     player = seat(db, room, host, result="In_Progress")
-    return room, player, start, end
+    return room, player, start, end, {problem.lc_id: problem.id}
 
 
 def submission(slug, when, status):
@@ -39,14 +46,14 @@ def test_get_leetcode_player_submissions_merges_and_hides():
             ],
         }
     }
-    with patch("app.domain.catalog.services.leetcode_graphql", return_value=payload):
+    with patch("app.domain.matches.leetcode.leetcode_graphql", return_value=payload):
         merged = get_leetcode_player_submissions("alex")
 
     assert merged["hidden"] is False
     assert len(merged["submissions"]) == 2
 
     with patch(
-        "app.domain.catalog.services.leetcode_graphql",
+        "app.domain.matches.leetcode.leetcode_graphql",
         return_value={"data": {"recentSubmissionList": None, "recentAcSubmissionList": None}},
     ):
         hidden = get_leetcode_player_submissions("alex")
@@ -55,7 +62,7 @@ def test_get_leetcode_player_submissions_merges_and_hides():
 
 
 def test_record_match_submissions_scores_a_new_accept_once(db):
-    room, player, start, end = open_match(db)
+    room, player, start, end, room_problems = open_match(db)
     inside = start + timedelta(minutes=1)
     outside = start - timedelta(minutes=10)
     rows = record_match_submissions(
@@ -69,7 +76,7 @@ def test_record_match_submissions_scores_a_new_accept_once(db):
             submission("two-sum", inside, "Wrong Answer"),
             submission("two-sum", inside + timedelta(seconds=30), "Accepted"),
         ],
-        {"two-sum", "missing-problem"},
+        room_problems,
         start,
         end,
     )
@@ -85,7 +92,7 @@ def test_record_match_submissions_scores_a_new_accept_once(db):
         room,
         player,
         [submission("two-sum", inside, "Accepted")],
-        {"two-sum"},
+        room_problems,
         start,
         end,
     )
@@ -94,14 +101,14 @@ def test_record_match_submissions_scores_a_new_accept_once(db):
 
 
 def test_record_match_submissions_upgrades_a_wrong_answer(db):
-    room, player, start, end = open_match(db)
+    room, player, start, end, room_problems = open_match(db)
     inside = start + timedelta(minutes=1)
     wrong = record_match_submissions(
         db,
         room,
         player,
         [submission("two-sum", inside, "Wrong Answer")],
-        {"two-sum"},
+        room_problems,
         start,
         end,
     )
@@ -114,7 +121,7 @@ def test_record_match_submissions_upgrades_a_wrong_answer(db):
         room,
         player,
         [submission("two-sum", inside + timedelta(seconds=20), "Accepted")],
-        {"two-sum"},
+        room_problems,
         start,
         end,
     )
@@ -124,16 +131,59 @@ def test_record_match_submissions_upgrades_a_wrong_answer(db):
     assert stored.current_status == "Accepted"
 
 
-def test_record_match_submissions_skips_a_slug_with_no_problem_row(db):
-    room, player, start, end = open_match(db)
+def test_record_match_submissions_ignores_problems_outside_the_room(db):
+    room, player, start, end, room_problems = open_match(db)
     rows = record_match_submissions(
         db,
         room,
         player,
-        [submission("missing-problem", start + timedelta(minutes=1), "Accepted")],
-        {"missing-problem"},
+        [submission("not-in-this-room", start + timedelta(minutes=1), "Accepted")],
+        room_problems,
         start,
         end,
     )
     assert rows == []
     assert player.score == 0
+
+
+def test_leetcode_graphql_success_and_failures():
+    class Response:
+        def __init__(self, payload, fail=False):
+            self.payload = payload
+            self.fail = fail
+
+        def raise_for_status(self):
+            if self.fail:
+                raise RuntimeError("http down")
+
+        def json(self):
+            return self.payload
+
+    with patch("app.domain.matches.leetcode.requests.post", return_value=Response({"data": {}})):
+        assert leetcode_graphql("query {}") == {"data": {}}
+
+    with patch("app.domain.matches.leetcode.requests.post", return_value=Response({}, fail=True)):
+        with pytest.raises(RuntimeError, match="LeetCode API error"):
+            leetcode_graphql("query {}")
+
+    with patch(
+        "app.domain.matches.leetcode.requests.post",
+        return_value=Response({"errors": [{"message": "bad query"}]}),
+    ):
+        with pytest.raises(RuntimeError, match="bad query"):
+            leetcode_graphql("query {}")
+
+
+def test_lookup_leetcode_user():
+    with patch(
+        "app.domain.matches.leetcode.leetcode_graphql",
+        return_value={"data": {"matchedUser": {"username": "Alex"}}},
+    ):
+        assert lookup_leetcode_user("alex") == "Alex"
+
+    with patch(
+        "app.domain.matches.leetcode.leetcode_graphql",
+        return_value={"data": {"matchedUser": None}},
+    ):
+        with pytest.raises(ValueError, match="not found"):
+            lookup_leetcode_user("missing")

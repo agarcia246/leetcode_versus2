@@ -29,8 +29,6 @@ class Problem(Base):
         ),
     )
 
-    submissions = relationship("Submission", back_populates="problem")
-    room_problems = relationship("RoomProblem", back_populates="problem")
     topic_links = relationship("ProblemTopic", back_populates="problem")
 
 

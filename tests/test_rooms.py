@@ -4,7 +4,16 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from app.domain.matches.models import CreateRoomModel, GetRoomModel, JoinRoomModel, Room, RoomPlayer, StartRoomModel
+from app.domain.matches.models import (
+    CreateRoomModel,
+    GetRoomModel,
+    JoinRoomModel,
+    Player,
+    Room,
+    RoomPlayer,
+    RoomProblem,
+    StartRoomModel,
+)
 from app.domain.matches.services import create_room, get_room, join_room, start_room
 from tests.factories import add_player, add_problem, add_room, attach, seat
 
@@ -19,24 +28,77 @@ def host_model(username="alex"):
     )
 
 
-@patch("app.domain.matches.services.lookup_leetcode_user")
-@patch("app.domain.matches.services.add_problems_to_room")
-def test_create_room(mock_add_problems, mock_lookup, db):
-    mock_lookup.return_value = "alex"
+PICKED = [
+    {"id": 7, "title": "Two Sum", "slug": "two-sum", "url": "u", "difficulty": "Easy"},
+    {"id": 3, "title": "Valid Parentheses", "slug": "valid-parentheses", "url": "u", "difficulty": "Easy"},
+]
 
+
+@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
+@patch("app.domain.matches.services.catalog_client.pick_problems", return_value=PICKED)
+def test_create_room_deals_the_problems_the_catalog_picked(mock_pick, mock_lookup, db):
     result = create_room(db, host_model())
 
     assert result["room_code"] is not None
     assert result["host_id"] is not None
+    mock_pick.assert_called_once_with(count=2, topics=["Array"], difficulty="Easy")
+    dealt = (
+        db.query(RoomProblem)
+        .filter(RoomProblem.room_id == result["room_id"])
+        .order_by(RoomProblem.display_order)
+        .all()
+    )
+    assert [(row.problem_id, row.display_order) for row in dealt] == [(7, 0), (3, 1)]
 
 
-@patch("app.domain.matches.services.add_problems_to_room", side_effect=ValueError("Not enough problems"))
+@patch("app.domain.matches.services.catalog_client.pick_problems", side_effect=ValueError("Not enough problems"))
 @patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
-def test_create_room_rolls_back_when_problems_cannot_be_chosen(mock_lookup, mock_add_problems, db):
+def test_create_room_writes_nothing_when_the_catalog_refuses(mock_lookup, mock_pick, db):
     with pytest.raises(ValueError, match="Not enough problems"):
         create_room(db, host_model())
 
     assert db.query(Room).count() == 0
+    assert db.query(Player).count() == 0
+    mock_lookup.assert_not_called()
+
+
+@patch("app.domain.matches.services.catalog_client.pick_problems", return_value=PICKED[:1])
+@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
+def test_create_room_rejects_a_short_problem_set(mock_lookup, mock_pick, db):
+    with pytest.raises(ValueError, match="Not enough problems"):
+        create_room(db, host_model())
+
+    assert db.query(Room).count() == 0
+
+
+@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
+def test_create_then_get_room_across_the_seam(mock_lookup, db):
+    """Matches -> catalog_client -> catalog, with only LeetCode mocked."""
+
+    questions = [
+        {
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+            "difficulty": "EASY",
+            "paidOnly": False,
+            "topicTags": [{"name": "Array", "slug": "array"}],
+        },
+        {
+            "title": "Contains Duplicate",
+            "titleSlug": "contains-duplicate",
+            "difficulty": "EASY",
+            "paidOnly": False,
+            "topicTags": [{"name": "Array", "slug": "array"}],
+        },
+    ]
+    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
+        with patch("app.domain.catalog.services.fetch_problems_for_topics", return_value=questions):
+            created = create_room(db, host_model())
+
+    state = get_room(db, GetRoomModel(room_code=created["room_code"]))
+
+    assert {problem["slug"] for problem in state["problems"]} == {"two-sum", "contains-duplicate"}
+    assert [problem["display_order"] for problem in state["problems"]] == [0, 1]
 
 
 def test_join_room_paths(db):
