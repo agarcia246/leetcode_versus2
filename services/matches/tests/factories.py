@@ -1,8 +1,16 @@
 from datetime import datetime, timezone
 
-from app.domain.catalog.models import Problem, ProblemTopic, Topic
-from app.domain.common import to_db_time
-from app.domain.matches.models import Player, Room, RoomPlayer, RoomProblem
+from app.common import to_db_time
+from app.models import Player, Room, RoomPlayer, RoomProblem
+
+# What catalog's GET /problems returns for problem 1 (the catalog owns the details).
+TWO_SUM = {
+    "id": 1,
+    "title": "Two Sum",
+    "slug": "two-sum",
+    "url": "https://leetcode.com/problems/two-sum/",
+    "difficulty": "Easy",
+}
 
 
 def add_player(db, username):
@@ -27,27 +35,6 @@ def add_room(db, host, code="ROOM01", status="Created", minutes=30, created=None
     return room
 
 
-def add_problem(db, slug="two-sum", title="Two Sum", difficulty="Easy", topic="Array"):
-    problem = Problem(
-        title=title,
-        lc_id=slug,
-        lc_url=f"https://leetcode.com/problems/{slug}/",
-        difficulty=difficulty,
-    )
-    db.add(problem)
-    db.flush()
-
-    topic_row = db.query(Topic).filter(Topic.topic_name == topic).first()
-    if topic_row is None:
-        topic_row = Topic(topic_name=topic)
-        db.add(topic_row)
-        db.flush()
-
-    db.add(ProblemTopic(problem_id=problem.id, topic_id=topic_row.id))
-    db.flush()
-    return problem
-
-
 def seat(db, room, player, score=0, result="Created"):
     link = RoomPlayer(
         room_id=room.id,
@@ -61,8 +48,10 @@ def seat(db, room, player, score=0, result="Created"):
     return link
 
 
-def attach(db, room, problem, order=0):
-    link = RoomProblem(room_id=room.id, problem_id=problem.id, display_order=order)
+def attach(db, room, problem_id=1, order=0):
+    """Deal a catalog problem (by ID only: no FK across the seam) into a room."""
+
+    link = RoomProblem(room_id=room.id, problem_id=problem_id, display_order=order)
     db.add(link)
     db.flush()
     return link

@@ -8,10 +8,10 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain.common import DIFFICULTIES, parse_db_time, to_db_time, utc_now
-from app.domain.matches import catalog_client
-from app.domain.matches.leetcode import get_leetcode_player_submissions, lookup_leetcode_user
-from app.domain.matches.models import (
+from app.common import DIFFICULTIES, parse_db_time, to_db_time, utc_now
+from app import catalog_client
+from app.leetcode import get_leetcode_player_submissions, lookup_leetcode_user
+from app.models import (
     CreateRoomModel,
     GetRoomModel,
     JoinRoomModel,

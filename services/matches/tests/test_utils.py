@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.domain.common import parse_db_time, to_db_time
-from app.domain.matches.models import RoomPlayer
-from app.domain.matches.services import (
+from app.common import parse_db_time, to_db_time
+from app.models import RoomPlayer
+from app.services import (
     add_player_to_room,
     assign_match_results,
     canonical_submission_status,
@@ -74,14 +74,14 @@ def test_generate_room_code_skips_a_taken_code(db):
     host = add_player(db, "alex")
     add_room(db, host, code="AAAAAA")
 
-    with patch("app.domain.matches.services.random.choice", side_effect=["A"] * 6 + ["B"] * 6):
+    with patch("app.services.random.choice", side_effect=["A"] * 6 + ["B"] * 6):
         assert generate_room_code(db) == "BBBBBB"
 
 
 def test_get_or_create_player_reuses_existing_name(db):
     add_player(db, "Alex")
 
-    with patch("app.domain.matches.services.lookup_leetcode_user") as lookup:
+    with patch("app.services.lookup_leetcode_user") as lookup:
         player = get_or_create_player(db, " alex ")
 
     lookup.assert_not_called()

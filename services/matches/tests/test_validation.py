@@ -1,7 +1,7 @@
 import pytest
 
-from app.domain.matches.models import CreateRoomModel
-from app.domain.matches.services import validate_room_settings
+from app.models import CreateRoomModel
+from app.services import validate_room_settings
 
 
 def room_model():

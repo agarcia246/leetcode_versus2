@@ -1,10 +1,11 @@
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
-from app.domain.matches.models import (
+from app.models import (
     CreateRoomModel,
     GetRoomModel,
     JoinRoomModel,
@@ -14,8 +15,11 @@ from app.domain.matches.models import (
     RoomProblem,
     StartRoomModel,
 )
-from app.domain.matches.services import create_room, get_room, join_room, start_room
-from tests.factories import add_player, add_problem, add_room, attach, seat
+from app.services import create_room, get_room, join_room, start_room
+import responses
+
+from app import config
+from tests.factories import TWO_SUM, add_player, add_room, attach, seat
 
 
 def host_model(username="alex"):
@@ -34,8 +38,8 @@ PICKED = [
 ]
 
 
-@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
-@patch("app.domain.matches.services.catalog_client.pick_problems", return_value=PICKED)
+@patch("app.services.lookup_leetcode_user", return_value="alex")
+@patch("app.services.catalog_client.pick_problems", return_value=PICKED)
 def test_create_room_deals_the_problems_the_catalog_picked(mock_pick, mock_lookup, db):
     result = create_room(db, host_model())
 
@@ -51,8 +55,8 @@ def test_create_room_deals_the_problems_the_catalog_picked(mock_pick, mock_looku
     assert [(row.problem_id, row.display_order) for row in dealt] == [(7, 0), (3, 1)]
 
 
-@patch("app.domain.matches.services.catalog_client.pick_problems", side_effect=ValueError("Not enough problems"))
-@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
+@patch("app.services.catalog_client.pick_problems", side_effect=ValueError("Not enough problems"))
+@patch("app.services.lookup_leetcode_user", return_value="alex")
 def test_create_room_writes_nothing_when_the_catalog_refuses(mock_lookup, mock_pick, db):
     with pytest.raises(ValueError, match="Not enough problems"):
         create_room(db, host_model())
@@ -62,8 +66,8 @@ def test_create_room_writes_nothing_when_the_catalog_refuses(mock_lookup, mock_p
     mock_lookup.assert_not_called()
 
 
-@patch("app.domain.matches.services.catalog_client.pick_problems", return_value=PICKED[:1])
-@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
+@patch("app.services.catalog_client.pick_problems", return_value=PICKED[:1])
+@patch("app.services.lookup_leetcode_user", return_value="alex")
 def test_create_room_rejects_a_short_problem_set(mock_lookup, mock_pick, db):
     with pytest.raises(ValueError, match="Not enough problems"):
         create_room(db, host_model())
@@ -71,33 +75,32 @@ def test_create_room_rejects_a_short_problem_set(mock_lookup, mock_pick, db):
     assert db.query(Room).count() == 0
 
 
-@patch("app.domain.matches.services.lookup_leetcode_user", return_value="alex")
+CATALOG = "http://catalog.test"
+CONTAINS_DUPLICATE = {
+    "id": 2,
+    "title": "Contains Duplicate",
+    "slug": "contains-duplicate",
+    "url": "https://leetcode.com/problems/contains-duplicate/",
+    "difficulty": "Easy",
+}
+
+
+@responses.activate
+@patch.object(config, "CATALOG_URL", CATALOG)
+@patch("app.services.lookup_leetcode_user", return_value="alex")
 def test_create_then_get_room_across_the_seam(mock_lookup, db):
-    """Matches -> catalog_client -> catalog, with only LeetCode mocked."""
+    """Matches -> HTTP -> catalog, with the catalog service replaced by a stub."""
 
-    questions = [
-        {
-            "title": "Two Sum",
-            "titleSlug": "two-sum",
-            "difficulty": "EASY",
-            "paidOnly": False,
-            "topicTags": [{"name": "Array", "slug": "array"}],
-        },
-        {
-            "title": "Contains Duplicate",
-            "titleSlug": "contains-duplicate",
-            "difficulty": "EASY",
-            "paidOnly": False,
-            "topicTags": [{"name": "Array", "slug": "array"}],
-        },
-    ]
-    with patch("app.domain.catalog.services.fetch_topic_tags", return_value=[{"name": "Array", "slug": "array"}]):
-        with patch("app.domain.catalog.services.fetch_problems_for_topics", return_value=questions):
-            created = create_room(db, host_model())
+    pick = responses.post(f"{CATALOG}/problems/pick", json=[TWO_SUM, CONTAINS_DUPLICATE])
+    lookup = responses.get(f"{CATALOG}/problems", json=[TWO_SUM, CONTAINS_DUPLICATE])
 
+    created = create_room(db, host_model())
     state = get_room(db, GetRoomModel(room_code=created["room_code"]))
 
-    assert {problem["slug"] for problem in state["problems"]} == {"two-sum", "contains-duplicate"}
+    assert pick.call_count == 1
+    assert json.loads(pick.calls[0].request.body) == {"count": 2, "topics": ["Array"], "difficulty": "Easy"}
+    assert lookup.calls[0].request.params == {"ids": "1,2"}
+    assert [problem["slug"] for problem in state["problems"]] == ["two-sum", "contains-duplicate"]
     assert [problem["display_order"] for problem in state["problems"]] == [0, 1]
 
 
@@ -107,7 +110,7 @@ def test_join_room_paths(db):
     room = add_room(db, host, created=created)
     seat(db, room, host)
 
-    with patch("app.domain.matches.services.lookup_leetcode_user", return_value="sam"):
+    with patch("app.services.lookup_leetcode_user", return_value="sam"):
         with pytest.raises(HTTPException) as inactive:
             join_room(db, JoinRoomModel(username="sam", room_code="room01"))
     assert inactive.value.status_code == 400
@@ -115,11 +118,11 @@ def test_join_room_paths(db):
 
     fresh = add_room(db, host, code="FRESH1")
     seat(db, fresh, host)
-    with patch("app.domain.matches.services.lookup_leetcode_user", return_value="sam"):
+    with patch("app.services.lookup_leetcode_user", return_value="sam"):
         joined = join_room(db, JoinRoomModel(username="sam", room_code="fresh1"))
     assert joined["player_id"] is not None
 
-    with patch("app.domain.matches.services.lookup_leetcode_user", return_value="sam"):
+    with patch("app.services.lookup_leetcode_user", return_value="sam"):
         again = join_room(db, JoinRoomModel(username="sam", room_code="FRESH1"))
     assert again["player_id"] == joined["player_id"]
 
@@ -133,12 +136,12 @@ def test_join_room_paths(db):
     assert done.value.detail == "Room already finished"
 
     live = add_room(db, host, code="LIVE01", status="Active")
-    with patch("app.domain.matches.services.lookup_leetcode_user", return_value="late"):
+    with patch("app.services.lookup_leetcode_user", return_value="late"):
         late = join_room(db, JoinRoomModel(username="late", room_code="LIVE01"))
     seated = db.query(RoomPlayer).filter(RoomPlayer.player_id == late["player_id"]).one()
     assert seated.result == "In_Progress"
 
-    with patch("app.domain.matches.services.get_or_create_player", side_effect=RuntimeError("db down")):
+    with patch("app.services.get_or_create_player", side_effect=RuntimeError("db down")):
         with pytest.raises(RuntimeError, match="db down"):
             join_room(db, JoinRoomModel(username="sam", room_code="FRESH1"))
 
@@ -173,8 +176,7 @@ def test_start_room_paths(db):
         start_room(db, StartRoomModel(player_id=guest.id, room_code="WAIT01"))
     assert stranger.value.detail == "Host must start room"
 
-    problem = add_problem(db)
-    attach(db, waiting, problem)
+    attach(db, waiting, TWO_SUM["id"])
     db.commit()
     started = start_room(db, StartRoomModel(player_id=host.id, room_code="wait01"))
     assert started["message"] == "Room started"
@@ -191,9 +193,9 @@ def test_start_room_paths(db):
     boom = add_room(db, host, code="BOOM01")
     seat(db, boom, host)
     seat(db, boom, guest)
-    attach(db, boom, problem)
+    attach(db, boom, TWO_SUM["id"])
     db.commit()
-    with patch("app.domain.matches.services.utc_now", side_effect=[datetime.now(timezone.utc), RuntimeError("clock")]):
+    with patch("app.services.utc_now", side_effect=[datetime.now(timezone.utc), RuntimeError("clock")]):
         with pytest.raises(RuntimeError, match="clock"):
             start_room(db, StartRoomModel(player_id=host.id, room_code="BOOM01"))
 
@@ -206,7 +208,6 @@ def test_get_room_polls_scores_and_finishes(db):
     now = datetime.now(timezone.utc)
     host = add_player(db, "alex")
     guest = add_player(db, "sam")
-    problem = add_problem(db)
     room = add_room(
         db,
         host,
@@ -217,7 +218,7 @@ def test_get_room_polls_scores_and_finishes(db):
     )
     host_seat = seat(db, room, host, result="In_Progress")
     seat(db, room, guest, result="In_Progress")
-    attach(db, room, problem)
+    attach(db, room, TWO_SUM["id"])
     db.commit()
 
     accepted = {
@@ -231,8 +232,9 @@ def test_get_room_polls_scores_and_finishes(db):
             return {"submissions": [accepted], "hidden": False}
         raise RuntimeError("timeout")
 
-    with patch("app.domain.matches.services.get_leetcode_player_submissions", side_effect=submissions):
-        state = get_room(db, GetRoomModel(room_code="live01"))
+    with patch("app.services.get_leetcode_player_submissions", side_effect=submissions):
+        with patch("app.services.catalog_client.get_problems", return_value=[TWO_SUM]):
+            state = get_room(db, GetRoomModel(room_code="live01"))
 
     assert state["status"] == "Active"
     assert state["problems"][0]["slug"] == "two-sum"
@@ -243,7 +245,7 @@ def test_get_room_polls_scores_and_finishes(db):
     hidden = add_room(db, host, code="HIDE01", status="Active", start=now - timedelta(minutes=5), end=now + timedelta(minutes=10))
     seat(db, hidden, host, result="In_Progress")
     with patch(
-        "app.domain.matches.services.get_leetcode_player_submissions",
+        "app.services.get_leetcode_player_submissions",
         return_value={"submissions": [], "hidden": True},
     ):
         get_room(db, GetRoomModel(room_code="HIDE01"))
@@ -260,7 +262,7 @@ def test_get_room_polls_scores_and_finishes(db):
     seat(db, over, host, score=2, result="In_Progress")
     seat(db, over, guest, score=2, result="In_Progress")
     with patch(
-        "app.domain.matches.services.get_leetcode_player_submissions",
+        "app.services.get_leetcode_player_submissions",
         return_value={"submissions": [], "hidden": False},
     ):
         finished = get_room(db, GetRoomModel(room_code="OVER01"))
@@ -270,7 +272,7 @@ def test_get_room_polls_scores_and_finishes(db):
     pending = add_room(db, host, code="PEND01", status="Finished", end=now - timedelta(minutes=1))
     seat(db, pending, host, score=0, result="In_Progress")
     with patch(
-        "app.domain.matches.services.get_leetcode_player_submissions",
+        "app.services.get_leetcode_player_submissions",
         return_value={"submissions": [], "hidden": False},
     ):
         closed = get_room(db, GetRoomModel(room_code="PEND01"))
@@ -284,7 +286,7 @@ def test_get_room_polls_scores_and_finishes(db):
     broken = add_room(db, host, code="BROKE1", status="Active", start=now - timedelta(minutes=5), end=now + timedelta(minutes=10))
     seat(db, broken, host, result="In_Progress")
     db.commit()
-    with patch("app.domain.matches.services.get_leetcode_player_submissions", side_effect=ValueError("boom")):
+    with patch("app.services.get_leetcode_player_submissions", side_effect=ValueError("boom")):
         with pytest.raises(ValueError, match="boom"):
             get_room(db, GetRoomModel(room_code="BROKE1"))
     assert db.get(Room, broken.id).poll_error == "boom"

@@ -2,14 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
-from app.domain.matches.models import (
+from app.database import get_db
+from app.models import (
     CreateRoomModel,
     GetRoomModel,
     JoinRoomModel,
     StartRoomModel,
 )
-from app.domain.matches.services import create_room, get_room, join_room, start_room
+from app.services import create_room, get_room, join_room, start_room
 
 router = APIRouter()
 
@@ -20,14 +20,6 @@ class JoinRoomBody(BaseModel):
 
 class StartRoomBody(BaseModel):
     player_id: int
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post("/rooms/create")

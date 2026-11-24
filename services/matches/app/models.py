@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.database import Base
-from app.domain.common import DIFFICULTIES
+from app.common import DIFFICULTIES
 
 
 class Player(Base):

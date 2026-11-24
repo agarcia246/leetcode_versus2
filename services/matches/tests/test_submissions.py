@@ -4,14 +4,14 @@ from unittest.mock import patch
 
 import pytest
 
-from app.domain.matches.leetcode import (
+from app.leetcode import (
     get_leetcode_player_submissions,
     leetcode_graphql,
     lookup_leetcode_user,
 )
-from app.domain.matches.models import Submission
-from app.domain.matches.services import record_match_submissions
-from tests.factories import add_player, add_problem, add_room, attach, seat
+from app.models import Submission
+from app.services import record_match_submissions
+from tests.factories import TWO_SUM, add_player, add_room, attach, seat
 
 
 def open_match(db):
@@ -19,10 +19,9 @@ def open_match(db):
     end = start + timedelta(minutes=30)
     host = add_player(db, "alex")
     room = add_room(db, host, status="Active", start=start, end=end)
-    problem = add_problem(db)
-    attach(db, room, problem)
+    attach(db, room, TWO_SUM["id"])
     player = seat(db, room, host, result="In_Progress")
-    return room, player, start, end, {problem.lc_id: problem.id}
+    return room, player, start, end, {TWO_SUM["slug"]: TWO_SUM["id"]}
 
 
 def submission(slug, when, status):
@@ -46,14 +45,14 @@ def test_get_leetcode_player_submissions_merges_and_hides():
             ],
         }
     }
-    with patch("app.domain.matches.leetcode.leetcode_graphql", return_value=payload):
+    with patch("app.leetcode.leetcode_graphql", return_value=payload):
         merged = get_leetcode_player_submissions("alex")
 
     assert merged["hidden"] is False
     assert len(merged["submissions"]) == 2
 
     with patch(
-        "app.domain.matches.leetcode.leetcode_graphql",
+        "app.leetcode.leetcode_graphql",
         return_value={"data": {"recentSubmissionList": None, "recentAcSubmissionList": None}},
     ):
         hidden = get_leetcode_player_submissions("alex")
@@ -159,15 +158,15 @@ def test_leetcode_graphql_success_and_failures():
         def json(self):
             return self.payload
 
-    with patch("app.domain.matches.leetcode.requests.post", return_value=Response({"data": {}})):
+    with patch("app.leetcode.requests.post", return_value=Response({"data": {}})):
         assert leetcode_graphql("query {}") == {"data": {}}
 
-    with patch("app.domain.matches.leetcode.requests.post", return_value=Response({}, fail=True)):
+    with patch("app.leetcode.requests.post", return_value=Response({}, fail=True)):
         with pytest.raises(RuntimeError, match="LeetCode API error"):
             leetcode_graphql("query {}")
 
     with patch(
-        "app.domain.matches.leetcode.requests.post",
+        "app.leetcode.requests.post",
         return_value=Response({"errors": [{"message": "bad query"}]}),
     ):
         with pytest.raises(RuntimeError, match="bad query"):
@@ -176,13 +175,13 @@ def test_leetcode_graphql_success_and_failures():
 
 def test_lookup_leetcode_user():
     with patch(
-        "app.domain.matches.leetcode.leetcode_graphql",
+        "app.leetcode.leetcode_graphql",
         return_value={"data": {"matchedUser": {"username": "Alex"}}},
     ):
         assert lookup_leetcode_user("alex") == "Alex"
 
     with patch(
-        "app.domain.matches.leetcode.leetcode_graphql",
+        "app.leetcode.leetcode_graphql",
         return_value={"data": {"matchedUser": None}},
     ):
         with pytest.raises(ValueError, match="not found"):
