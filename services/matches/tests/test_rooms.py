@@ -19,6 +19,7 @@ from app.services import create_room, get_room, join_room, start_room
 import responses
 
 from app import config
+from app.catalog_client import CatalogUnavailable
 from tests.factories import TWO_SUM, add_player, add_room, attach, seat
 
 
@@ -102,6 +103,7 @@ def test_create_then_get_room_across_the_seam(mock_lookup, db):
     assert lookup.calls[0].request.params == {"ids": "1,2"}
     assert [problem["slug"] for problem in state["problems"]] == ["two-sum", "contains-duplicate"]
     assert [problem["display_order"] for problem in state["problems"]] == [0, 1]
+    assert state["problems_unavailable"] is False
 
 
 def test_join_room_paths(db):
@@ -291,3 +293,50 @@ def test_get_room_polls_scores_and_finishes(db):
             get_room(db, GetRoomModel(room_code="BROKE1"))
     assert db.get(Room, broken.id).poll_error == "boom"
     assert host_seat.score == 1
+
+
+def test_get_room_degrades_when_the_catalog_is_unavailable(db):
+    now = datetime.now(timezone.utc)
+    host = add_player(db, "alex")
+    guest = add_player(db, "sam")
+    room = add_room(
+        db,
+        host,
+        code="LIVE01",
+        status="Active",
+        start=now - timedelta(minutes=5),
+        end=now + timedelta(minutes=25),
+    )
+    seat(db, room, host, score=1, result="In_Progress")
+    seat(db, room, guest, score=0, result="In_Progress")
+    attach(db, room, TWO_SUM["id"])
+    db.commit()
+
+    with patch("app.services.catalog_client.get_problems", side_effect=CatalogUnavailable()):
+        with patch("app.services.get_leetcode_player_submissions") as poll:
+            state = get_room(db, GetRoomModel(room_code="LIVE01"))
+
+    # The room still loads: players and scores come from matches' own database.
+    assert state["status"] == "Active"
+    assert {player["username"]: player["score"] for player in state["players"]} == {"alex": 1, "sam": 0}
+    # Problem details live in the catalog, so they are missing and flagged.
+    assert state["problems"] == []
+    assert state["problems_unavailable"] is True
+    # Scoring needs the catalog's slugs, so this round of polling is skipped.
+    poll.assert_not_called()
+    assert db.get(Room, room.id).last_polled_at is None
+    assert db.get(Room, room.id).poll_error is None
+
+
+def test_a_room_without_problems_never_calls_the_catalog(db):
+    host = add_player(db, "alex")
+    room = add_room(db, host, code="EMPTY1")
+    seat(db, room, host)
+    db.commit()
+
+    with patch("app.catalog_client.requests.request") as request:
+        state = get_room(db, GetRoomModel(room_code="EMPTY1"))
+
+    request.assert_not_called()
+    assert state["problems"] == []
+    assert state["problems_unavailable"] is False

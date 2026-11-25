@@ -5,6 +5,7 @@ import requests
 import responses
 
 from app import catalog_client, config
+from app.catalog_client import CatalogUnavailable
 from tests.factories import TWO_SUM
 
 CATALOG = "http://catalog.test"
@@ -36,18 +37,34 @@ def test_a_400_from_the_catalog_is_a_value_error():
 
 
 @responses.activate
-def test_a_server_error_from_the_catalog_is_a_runtime_error():
+def test_a_502_means_catalog_is_up_but_leetcode_failed_behind_it():
     responses.post(f"{CATALOG}/problems/pick", status=502, body="bad gateway")
 
-    with pytest.raises(RuntimeError, match="Catalog service error 502: bad gateway"):
+    with pytest.raises(RuntimeError, match="Catalog service error 502: bad gateway") as error:
+        catalog_client.pick_problems(count=1, topics=["Array"], difficulty="Easy")
+
+    assert not isinstance(error.value, CatalogUnavailable)
+
+
+@pytest.mark.parametrize("status", [500, 503])
+@responses.activate
+def test_other_server_errors_mean_the_catalog_is_unavailable(status):
+    # 503 is also what Container Apps answers while the catalog is cold-starting.
+    responses.post(f"{CATALOG}/problems/pick", status=status, body="App port is not ready")
+
+    with pytest.raises(CatalogUnavailable):
         catalog_client.pick_problems(count=1, topics=["Array"], difficulty="Easy")
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [requests.ConnectionError("refused"), requests.Timeout("read timed out")],
+)
 @responses.activate
-def test_an_unreachable_catalog_is_a_runtime_error():
-    responses.get(f"{CATALOG}/problems", body=requests.ConnectionError("refused"))
+def test_an_unreachable_or_slow_catalog_is_unavailable(failure):
+    responses.get(f"{CATALOG}/problems", body=failure)
 
-    with pytest.raises(RuntimeError, match="Catalog service unavailable"):
+    with pytest.raises(CatalogUnavailable, match="Catalog did not answer"):
         catalog_client.get_problems([1])
 
 

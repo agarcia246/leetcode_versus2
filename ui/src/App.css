@@ -66,6 +66,14 @@ button:disabled {
   color: #9b1c1c;
 }
 
+.notice {
+  margin-top: 16px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fff7e0;
+  color: #6b4e00;
+}
+
 .code {
   margin: 0;
   font-size: 28px;
