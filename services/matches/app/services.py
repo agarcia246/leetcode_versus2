@@ -515,14 +515,27 @@ def get_room(db: Session, model: GetRoomModel):
             .order_by(RoomProblem.display_order)
             .all()
         )
-        catalog_problems = {
-            problem["id"]: problem
-            for problem in catalog_client.get_problems(
-                [room_problem.problem_id for room_problem in room_problems]
-            )
-        }
 
-        if should_poll:
+
+        problem_ids = [room_problem.problem_id for room_problem in room_problems]
+
+        try:
+            catalog_problems = {p["id"]: p for p in catalog_client.get_problems(problem_ids)}
+            problems_unavailable = False
+
+        except catalog_client.CatalogUnavailable:
+            catalog_problems = {}
+            problems_unavailable = bool(problem_ids)
+
+
+
+
+
+
+
+
+
+        if should_poll and not problems_unavailable:
             problem_ids_by_slug = {
                 problem["slug"]: problem_id
                 for problem_id, problem in catalog_problems.items()
@@ -594,6 +607,7 @@ def get_room(db: Session, model: GetRoomModel):
                 # No FK across the seam: a problem the catalog no longer has is skipped.
                 if room_problem.problem_id in catalog_problems
             ],
+            "problems_unavailable":problems_unavailable,
         }
 
     except HTTPException:

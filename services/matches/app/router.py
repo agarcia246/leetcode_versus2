@@ -10,6 +10,7 @@ from app.models import (
     StartRoomModel,
 )
 from app.services import create_room, get_room, join_room, start_room
+from app.catalog_client import CatalogUnavailable
 
 router = APIRouter()
 
@@ -28,8 +29,14 @@ def create_room_route(model: CreateRoomModel, db: Session = Depends(get_db)):
         return create_room(db, model)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    except CatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail="The problem catalog is unavailable right now. Try again in a moment.") from exc
+    
     except RuntimeError as exc:
+        
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 
 
 @router.post("/rooms/{room_code}/join")

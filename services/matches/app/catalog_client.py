@@ -16,6 +16,11 @@ import requests
 from app import config
 
 
+
+class CatalogUnavailable(RuntimeError):
+    def __init__(self):
+        super().__init__("Catalog did not answer: down, timed out, or still starting (cold start).")
+
 def _detail(response: requests.Response) -> str:
     try:
         return str(response.json().get("detail", response.text))
@@ -23,17 +28,24 @@ def _detail(response: requests.Response) -> str:
         return response.text
 
 
+
+
+
+
+
 def _call(method: str, path: str, **kwargs):
     url = config.CATALOG_URL.rstrip("/") + path
     try:
         response = requests.request(method, url, timeout=config.CATALOG_TIMEOUT_S, **kwargs)
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Catalog service unavailable: {exc}") from exc
+    except requests.RequestException:
+        raise CatalogUnavailable()
 
     if response.status_code == 400:
         raise ValueError(_detail(response))
-    if response.status_code != 200:
+    elif response.status_code == 502:
         raise RuntimeError(f"Catalog service error {response.status_code}: {_detail(response)}")
+    if response.status_code != 200:
+        raise CatalogUnavailable()
 
     return response.json()
 
