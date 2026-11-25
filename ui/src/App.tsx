@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { api, useStartingUp } from './api'
 import './App.css'
 
 type Topic = { name: string; slug: string }
@@ -30,6 +31,7 @@ type Room = {
   end_time: string | null
   players: Player[]
   problems: Problem[]
+  problems_unavailable?: boolean
 }
 
 type Session = {
@@ -62,31 +64,6 @@ function saveSession(session: Session) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
 }
 
-async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers ?? {}),
-    },
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(readError(data))
-  }
-  return data as T
-}
-
-function readError(data: { detail?: unknown }): string {
-  if (typeof data.detail === 'string') return data.detail
-  if (Array.isArray(data.detail)) {
-    return data.detail
-      .map((item) => (item && typeof item.msg === 'string' ? item.msg : 'Invalid value'))
-      .join(' ')
-  }
-  return 'Request failed'
-}
-
 function timeLeft(endTime: string | null): string {
   if (!endTime) return ''
   const remaining = new Date(endTime).getTime() - Date.now()
@@ -102,6 +79,8 @@ function App() {
   const [room, setRoom] = useState<Room | null>(null)
   const [error, setError] = useState('')
   const [clock, setClock] = useState(timeLeft(null))
+  const startingUp = useStartingUp()
+  const loading = useRef(false)
 
   function updateSession(next: Session) {
     setSession(next)
@@ -114,14 +93,19 @@ function App() {
     let cancelled = false
 
     async function loadRoom() {
+      // A request can wait up to ~90 s for a cold start; don't stack polls behind it.
+      if (loading.current) return
+      loading.current = true
       try {
-        const next = await api<Room>(`/backend/rooms/${session.roomCode}`)
+        const next = await api<Room>('matches', `/rooms/${session.roomCode}`)
         if (!cancelled) {
           setRoom(next)
           setError('')
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load room')
+      } finally {
+        loading.current = false
       }
     }
 
@@ -157,6 +141,9 @@ function App() {
         )}
       </header>
 
+      {startingUp && (
+        <p className="notice">Starting up the servers, this can take up to a minute…</p>
+      )}
       {error && <p className="error">{error}</p>}
 
       {session.roomCode && room ? (
@@ -169,11 +156,11 @@ function App() {
             if (session.playerId === null || !session.roomCode) return
             setError('')
             try {
-              await api(`/backend/rooms/${session.roomCode}/start`, {
+              await api('matches', `/rooms/${session.roomCode}/start`, {
                 method: 'POST',
                 body: JSON.stringify({ player_id: session.playerId }),
               })
-              const next = await api<Room>(`/backend/rooms/${session.roomCode}`)
+              const next = await api<Room>('matches', `/rooms/${session.roomCode}`)
               setRoom(next)
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Could not start room')
@@ -215,7 +202,7 @@ function Home({
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    api<Filters>('/backend/filters')
+    api<Filters>('catalog', '/filters')
       .then((next) => {
         setFilters(next)
         setDifficulty(next.difficulties[0] ?? 'Easy')
@@ -229,7 +216,7 @@ function Home({
     setBusy(true)
     onError('')
     try {
-      const created = await api<{ room_code: string; host_id: number }>('/backend/rooms/create', {
+      const created = await api<{ room_code: string; host_id: number }>('matches', '/rooms/create', {
         method: 'POST',
         body: JSON.stringify({
           host_username: username,
@@ -258,7 +245,8 @@ function Home({
     onError('')
     try {
       const joined = await api<{ room_code: string; player_id: number }>(
-        `/backend/rooms/${roomCode.trim()}/join`,
+        'matches',
+        `/rooms/${roomCode.trim()}/join`,
         {
           method: 'POST',
           body: JSON.stringify({ username }),
@@ -375,6 +363,11 @@ function RoomView({
       {room.status === 'Inactive' && <p>This lobby expired before it started.</p>}
 
       <h2>Problems</h2>
+      {room.problems_unavailable && (
+        <p className="notice">
+          Problem details are unavailable right now. Scores update again when the catalog is back.
+        </p>
+      )}
       <ul>
         {room.problems.map((problem) => (
           <li key={problem.slug}>
