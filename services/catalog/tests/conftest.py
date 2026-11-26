@@ -2,9 +2,12 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-
+import os
 import app.models  # noqa: F401  (registers this service's tables on Base)
 from app.database import Base
+
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 engine = create_engine(
     "sqlite:///:memory:",
