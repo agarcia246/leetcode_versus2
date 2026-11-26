@@ -11,7 +11,7 @@ from tests.factories import add_problem
 @pytest.fixture
 def client(db):
     app.dependency_overrides[get_db] = lambda: db
-    yield TestClient(app)  # not a context manager: the lifespan (init_db) is not run
+    yield TestClient(app)  # not a context manager: the lifespan is not run
     app.dependency_overrides.clear()
 
 

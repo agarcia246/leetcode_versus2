@@ -4,6 +4,7 @@ import os
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
+GIT_SHA = os.getenv("GIT_SHA", "dev")
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 # Where the catalog service lives, and how long matches waits for it.
