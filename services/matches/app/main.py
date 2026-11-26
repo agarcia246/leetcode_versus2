@@ -7,13 +7,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
 from app.config import HOST, PORT, CORS_ORIGINS
-from app.database import init_db
+from app.database import engine, wait_for_db
+from app.migrations import run_migrations
 from app.router import router
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_db()
+    wait_for_db()
+    run_migrations(engine)
     yield
 
 

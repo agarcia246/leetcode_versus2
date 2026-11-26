@@ -6,6 +6,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import (
     CheckConstraint,
     Column,
+    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -138,6 +139,15 @@ class Submission(Base):
 
     room = relationship("Room", back_populates="submissions")
     player = relationship("Player", back_populates="submissions")
+
+
+class HealthCheck(Base):
+    """Row /health updates to prove this service can write its own database."""
+
+    __tablename__ = "health_check"
+
+    id = Column(Integer, primary_key=True)
+    checked_at = Column(DateTime, nullable=True)
 
 
 class CreateRoomModel(BaseModel):

@@ -3,6 +3,7 @@
 from sqlalchemy import (
     CheckConstraint,
     Column,
+    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -61,6 +62,15 @@ class ProblemTopic(Base):
 
     problem = relationship("Problem", back_populates="topic_links")
     topic = relationship("Topic", back_populates="problem_links")
+
+
+class HealthCheck(Base):
+    """Row /health updates to prove this service can write its own database."""
+
+    __tablename__ = "health_check"
+
+    id = Column(Integer, primary_key=True)
+    checked_at = Column(DateTime, nullable=True)
 
 
 # --- HTTP request/response bodies -------------------------------------------------

@@ -1,7 +1,13 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.config import GIT_SHA
 from app.database import get_db
 from app.models import (
     CreateRoomModel,
@@ -67,3 +73,16 @@ def start_room_route(
 @router.get("/rooms/{room_code}")
 def get_room_route(room_code: str, db: Session = Depends(get_db)):
     return get_room(db, GetRoomModel(room_code=room_code))
+
+
+@router.get("/health", responses={503: {"description": "Cannot read and write its own database"}})
+def health(db: Session = Depends(get_db)):
+    try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.execute(text("UPDATE health_check SET checked_at = :now WHERE id = 1"), {"now": now})
+        db.execute(text("SELECT checked_at FROM health_check WHERE id = 1")).one()
+        db.commit()
+        return {"status": "ok", "db": "ok", "version": GIT_SHA}
+    except SQLAlchemyError:
+        db.rollback()
+        return JSONResponse(status_code=503, content={"status": "error", "db": "unavailable", "version": GIT_SHA})

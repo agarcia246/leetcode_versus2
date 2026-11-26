@@ -1,35 +1,39 @@
 """Engine and session for this service's own database (DATABASE_URL)."""
 
-from pathlib import Path
+import logging
+import time
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import DATABASE_URL
 
-SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-IS_SQLITE = DATABASE_URL.startswith("sqlite")
-
-if IS_SQLITE:
-    # sqlite:///data/matches.db -> make sure data/ exists before connecting.
-    Path(DATABASE_URL.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
-
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if IS_SQLITE else {},
+    pool_pre_ping=True,  # drop pooled connections that died while the DB was paused
+    connect_args={"login_timeout": 10} if DATABASE_URL.startswith("mssql") else {},
 )
 
+logger = logging.getLogger(__name__)
 SessionLocal = sessionmaker(engine)
 Base = declarative_base()
 
 
-if IS_SQLITE:
-
-    @event.listens_for(engine, "connect")
-    def enable_foreign_keys(dbapi_connection, _connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+def wait_for_db(attempts: int = 10, first_delay: float = 2.0, max_delay: float = 20.0) -> None:
+    delay = first_delay
+    for attempt in range(1, attempts + 1):
+        try:
+            with engine.connect() as conn:
+                conn.exec_driver_sql("SELECT 1")
+            return
+        except OperationalError as exc:
+            if attempt == attempts:
+                raise
+            logger.warning("database not ready (attempt %d/%d): %s; retrying in %.0fs",
+                           attempt, attempts, exc, delay)
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
 
 
 def get_db():
@@ -40,14 +44,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-def init_db() -> None:
-    """Create this service's tables from schema.sql (SQLite only, until migrations replace it)."""
-
-    connection = engine.raw_connection()
-    try:
-        connection.executescript(SCHEMA_PATH.read_text())
-        connection.commit()
-    finally:
-        connection.close()

@@ -1,6 +1,12 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.config import GIT_SHA
 from app.database import get_db
 from app.models import FiltersOut, PickProblemsBody, ProblemOut
 from app.services import get_problems, list_match_filters, pick_problems
@@ -43,3 +49,16 @@ def get_problems_route(
         raise HTTPException(status_code=400, detail="ids must be comma-separated integers") from exc
 
     return get_problems(db, problem_ids)
+
+
+@router.get("/health", responses={503: {"description": "Cannot read and write its own database"}})
+def health(db: Session = Depends(get_db)):
+    try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.execute(text("UPDATE health_check SET checked_at = :now WHERE id = 1"), {"now": now})
+        db.execute(text("SELECT checked_at FROM health_check WHERE id = 1")).one()
+        db.commit()
+        return {"status": "ok", "db": "ok", "version": GIT_SHA}
+    except SQLAlchemyError:
+        db.rollback()
+        return JSONResponse(status_code=503, content={"status": "error", "db": "unavailable", "version": GIT_SHA})

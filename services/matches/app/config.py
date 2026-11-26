@@ -4,7 +4,8 @@ import os
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/matches.db")
+GIT_SHA = os.getenv("GIT_SHA", "dev")
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 # Where the catalog service lives, and how long matches waits for it.
 CATALOG_URL = os.getenv("CATALOG_URL", "http://catalog:8000")
